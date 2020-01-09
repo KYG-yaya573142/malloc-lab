@@ -42,6 +42,7 @@ static char *heap_listp;
 /* private functions */
 static void *extend_heap(size_t words);
 static void *find_fit(size_t asize);
+static void place(void *bp, size_t asize);
 
 /* basic constants and macros */
 #define WSIZE 4             /* word size (bytes) */
@@ -125,25 +126,61 @@ static void *extend_heap(size_t words)
     return (void *)bp;
 }
 
-static void *find_fit(size_t asize)
-{
-    return 0;
-}
-
 /* 
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
  */
 void *mm_malloc(size_t size)
 {
-    int newsize = ALIGN(size + SIZE_T_SIZE);
-    void *p = mem_sbrk(newsize);
-    if (p == (void *)-1)
-	return NULL;
-    else {
-        *(size_t *)p = size;
-        return (void *)((char *)p + SIZE_T_SIZE);
+    size_t asize;
+    char *bp;
+
+    /* ignore spurious requests */
+    if(size == 0)
+        return NULL;
+
+    /* min block size = 4 words (header + footer + 2 words free block) */
+    if(size <= DSIZE)
+        asize = 2*DSIZE;
+    else
+        asize = ALIGN(size + 2*WSIZE);
+
+    if((bp = find_fit(asize)) != NULL) {
+        return (void *)bp;
     }
+
+    /* no fit found, extend heap to place the block */
+    asize = MAX(asize, CHUNKSIZE);
+    if((bp = extend_heap(asize/WSIZE)) == NULL)
+        return NULL;
+
+    return (void *)bp;
+}
+
+/*
+ * simple first fit search.
+ * note: it's possible to create empty free block if (free size - asize) <= 2
+ * e.g., 2 words free block = header + footer but no content
+ */
+static void *find_fit(size_t asize)
+{
+    char *bp;
+
+    for(bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
+        if(!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
+            return (void *)bp;
+        }
+    }
+
+    return NULL;  /* no fit */
+}
+
+/*
+ * malloc placement policy
+ */
+static void place(void *bp, size_t asize)
+{
+
 }
 
 /*
