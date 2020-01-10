@@ -6,8 +6,8 @@
  * 
  * Allocator: implicit free list.
  * heap block: boundary tags.
- * mm_malloc: under progress...
- * mm_free: not yet start
+ * mm_malloc: finished.
+ * mm_free: freeing a block without coalesce
  * mm_realloc: not yet start
  */
 #include <stdio.h>
@@ -205,10 +205,16 @@ static void place(void *bp, size_t asize)
 }
 
 /*
- * mm_free - Freeing a block does nothing.
+ * mm_free - Freeing a block (without coalesce atm).
  */
-void mm_free(void *ptr)
+void mm_free(void *bp)
 {
+    size_t size = GET_SIZE(HDRP(bp));
+
+    PUTW(HDRP(bp), PACK(size, 0));
+    PUTW(FTRP(bp), PACK(size, 0));
+
+    /* coalesce(bp) */
 }
 
 /*
