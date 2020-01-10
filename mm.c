@@ -127,8 +127,8 @@ static void *extend_heap(size_t words)
 }
 
 /* 
- * mm_malloc - Allocate a block by incrementing the brk pointer.
- *     Always allocate a block whose size is a multiple of the alignment.
+ * mm_malloc - 
+ * Always allocate a block whose size is a multiple of the alignment.
  */
 void *mm_malloc(size_t size)
 {
@@ -145,7 +145,9 @@ void *mm_malloc(size_t size)
     else
         asize = ALIGN(size + 2*WSIZE);
 
+    /* search the free list for a fit */
     if((bp = find_fit(asize)) != NULL) {
+        place(bp, asize);
         return (void *)bp;
     }
 
@@ -154,6 +156,7 @@ void *mm_malloc(size_t size)
     if((bp = extend_heap(asize/WSIZE)) == NULL)
         return NULL;
 
+    place(bp, asize);
     return (void *)bp;
 }
 
@@ -176,11 +179,29 @@ static void *find_fit(size_t asize)
 }
 
 /*
- * malloc placement policy
+ * place - update the footer and header for both the allocated block and
+ * the remainder of the free block (if exist).
+ * The free block only got splitted when the remainder of the free block also
+ * follows the alignment requirement, otherwise the whole free block would
+ * being used instead.
+ * 
  */
 static void place(void *bp, size_t asize)
-{
+{   
+    size_t fsize = GET_SIZE(HDRP(bp));  /* size of the choosed free block */
 
+    /* if the remainder of the free block > required min block size (4 words) */
+    if((fsize - asize) >= (2*DSIZE)) {
+        PUTW(HDRP(bp), PACK(asize, 1));  /* allocated block header */
+        PUTW(FTRP(bp), PACK(asize, 1));  /* allocated block footer */
+        fsize -= asize;  /* size of the remainder of the free block */
+        PUTW(HDRP(NEXT_BLKP(bp)), PACK(fsize, 0));  /* new free block header */
+        PUTW(FTRP(NEXT_BLKP(bp)), PACK(fsize, 0));  /* new free block footer */
+    }
+    else {  /* use the whole free block without splitting */
+        PUTW(HDRP(bp), PACK(fsize, 1));  /* allocated block header */
+        PUTW(FTRP(bp), PACK(fsize, 1));  /* allocated block footer */
+    }
 }
 
 /*
