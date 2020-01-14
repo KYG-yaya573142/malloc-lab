@@ -43,6 +43,7 @@ static char *heap_listp;
 static void *extend_heap(size_t words);
 static void *find_fit(size_t asize);
 static void place(void *bp, size_t asize);
+static void *coalesce(void *bp);
 
 /* basic constants and macros */
 #define WSIZE 4             /* word size (bytes) */
@@ -123,7 +124,8 @@ static void *extend_heap(size_t words)
     PUTW(FTRP(bp), PACK(size, 0));          /* free block footer */
     PUTW(HDRP(NEXT_BLKP(bp)), PACK(0, 1));  /* new epilogue header */
 
-    return (void *)bp;
+    /* coalesce if the previous block was free */
+    return coalesce(bp);
 }
 
 /* 
@@ -214,7 +216,39 @@ void mm_free(void *bp)
     PUTW(HDRP(bp), PACK(size, 0));
     PUTW(FTRP(bp), PACK(size, 0));
 
-    /* coalesce(bp) */
+    coalesce(bp);
+}
+
+/* coalesce - merges adjacent free blocks using the boundary-tags coalescing technique
+*/
+static void *coalesce(void *bp)
+{
+    size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
+    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+    size_t size = GET_SIZE(HDRP(bp));
+
+    /* case 1 */
+    if(prev_alloc && next_alloc) {
+        return bp;
+    }
+    /* case 2 */
+    else if(prev_alloc && !next_alloc) {
+        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+    }
+    /* case 3 */
+    else if(!prev_alloc && next_alloc) {
+        size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+        bp = PREV_BLKP(bp);
+    }
+    /* case 4 */
+    else if(!prev_alloc && !next_alloc) {
+        size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
+        bp = PREV_BLKP(bp);
+    }
+
+    PUTW(HDRP(bp), PACK(size, 0));
+    PUTW(FTRP(bp), PACK(size, 0));
+    return bp;
 }
 
 /*
