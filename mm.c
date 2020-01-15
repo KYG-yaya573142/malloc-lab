@@ -5,10 +5,7 @@
  * provided by the memlib.c package (max heap size: 20MB).
  * 
  * Allocator: implicit free list.
- * heap block: boundary tags.
- * mm_malloc: finished.
- * mm_free: freeing a block without coalesce
- * mm_realloc: not yet start
+ * heap block: boundary tags on both free and allocated blocks.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,8 +39,8 @@ static char *heap_listp;
 /* private functions */
 static void *extend_heap(size_t words);
 static void *find_fit(size_t asize);
-static void place(void *bp, size_t asize);
 static void *coalesce(void *bp);
+static void place(void *bp, size_t asize);
 
 /* basic constants and macros */
 #define WSIZE 4             /* word size (bytes) */
@@ -273,33 +270,22 @@ void *mm_realloc(void *ptr, size_t size)
         return NULL;
     }
 
-    /* create a new space */
+    /* allocate the new block */
     if((new_bp = mm_malloc(size)) == NULL)
         return NULL;
 
-    old_size = GET_SIZE(HDRP(ptr)) - 2*WSIZE;
+    old_size = GET_SIZE(HDRP(ptr)) - 2*WSIZE;  /* content size of the old block */
+
+    /* The contents of the new block are same as the old ptr block 
+       (up to the minimum of the old and new block sizes). */
     if(old_size <= size) {
-        memset(new_bp, 0x0, size);
         memcpy(new_bp, ptr, old_size);
     }
     else {
         memcpy(new_bp, ptr, size);
     }
     
-    mm_free(ptr);
+    mm_free(ptr);  /* free the old block */
     return (void *)new_bp;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
