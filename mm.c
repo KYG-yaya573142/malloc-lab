@@ -107,7 +107,6 @@ int mm_init(void)
  * The extend_heap function is invoked in two different circumstances:
  * (1) when the heap is initialized
  * (2) when mm_malloc is unable to find a suitable fit.
- * 
  */
 static void *extend_heap(size_t words)
 {
@@ -164,9 +163,7 @@ void *mm_malloc(size_t size)
 }
 
 /*
- * simple first fit search.
- * note: it's possible to create empty free block if (free size - asize) <= 2
- * e.g., 2 words free block = header + footer but no content
+ * find_fit - simple first fit search.
  */
 static void *find_fit(size_t asize)
 {
@@ -188,6 +185,7 @@ static void *find_fit(size_t asize)
  * follows the alignment requirement, otherwise the whole free block would
  * being used instead.
  * 
+ * Note: Internal fragmentation increases in the case (free size - asize) <= 2.
  */
 static void place(void *bp, size_t asize)
 {   
@@ -208,7 +206,7 @@ static void place(void *bp, size_t asize)
 }
 
 /*
- * mm_free - Freeing a block (without coalesce atm).
+ * mm_free - Freeing a block and coalesce prev/next free block if exist.
  */
 void mm_free(void *bp)
 {
@@ -220,28 +218,29 @@ void mm_free(void *bp)
     coalesce(bp);
 }
 
-/* coalesce - merges adjacent free blocks using the boundary-tags coalescing technique
-*/
+/* 
+ * coalesce - merges adjacent free blocks using the boundary-tags coalescing technique
+ */
 static void *coalesce(void *bp)
 {
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     size_t size = GET_SIZE(HDRP(bp));
 
-    /* case 1 */
+    /* prev and next allocated */
     if(prev_alloc && next_alloc) {
         return bp;
     }
-    /* case 2 */
+    /* prev allocated, next free */
     else if(prev_alloc && !next_alloc) {
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
     }
-    /* case 3 */
+    /* prev free, next allocated */
     else if(!prev_alloc && next_alloc) {
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
         bp = PREV_BLKP(bp);
     }
-    /* case 4 */
+    /* prev and next free */
     else if(!prev_alloc && !next_alloc) {
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
         bp = PREV_BLKP(bp);
@@ -257,19 +256,38 @@ static void *coalesce(void *bp)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    void *oldptr = ptr;
-    void *newptr;
-    size_t copySize;
+    char *new_bp;
+    size_t old_size;
+
+    /* ignore spurious requests */
+    if(ptr == NULL && size == 0) {
+        return NULL;
+    }
+    /* if ptr is NULL, the call is equivalent to mm malloc(size) */
+    else if(ptr == NULL) {
+        return mm_malloc(size);
+    }
+    /* if size is equal to zero, the call is equivalent to mm free(ptr) */
+    else if(size == 0) {
+        mm_free(ptr);
+        return NULL;
+    }
+
+    /* create a new space */
+    if((new_bp = mm_malloc(size)) == NULL)
+        return NULL;
+
+    old_size = GET_SIZE(HDRP(ptr)) - 2*WSIZE;
+    if(old_size <= size) {
+        memset(new_bp, 0x0, size);
+        memcpy(new_bp, ptr, old_size);
+    }
+    else {
+        memcpy(new_bp, ptr, size);
+    }
     
-    newptr = mm_malloc(size);
-    if (newptr == NULL)
-      return NULL;
-    copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
-    if (size < copySize)
-      copySize = size;
-    memcpy(newptr, oldptr, copySize);
-    mm_free(oldptr);
-    return newptr;
+    mm_free(ptr);
+    return (void *)new_bp;
 }
 
 
