@@ -60,7 +60,7 @@ static void *coalesce(void *bp);
 #define PUTW(p, val)  (*(unsigned int *)(p) = (val))
 
 /* read the size and allocated fields from address p */
-#define GET_SIZE(p)   (GETW(p) & 0x7)
+#define GET_SIZE(p)   (GETW(p) & ~0x7)
 #define GET_ALLOC(p)  (GETW(p) & 0x1)
 
 /* given block ptr bp, compute address of its header and footer */
@@ -135,6 +135,7 @@ static void *extend_heap(size_t words)
 void *mm_malloc(size_t size)
 {
     size_t asize;
+    size_t extendsize;
     char *bp;
 
     /* ignore spurious requests */
@@ -154,8 +155,8 @@ void *mm_malloc(size_t size)
     }
 
     /* no fit found, extend heap to place the block */
-    asize = MAX(asize, CHUNKSIZE);
-    if((bp = extend_heap(asize/WSIZE)) == NULL)
+    extendsize = MAX(asize, CHUNKSIZE);
+    if((bp = extend_heap(extendsize/WSIZE)) == NULL)
         return NULL;
 
     place(bp, asize);
