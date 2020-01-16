@@ -33,6 +33,12 @@ team_t team = {
     ""
 };
 
+/* switch between first-fit / next-fit search by using conditional compilation:
+ * 1. define nothing - using first-fit search
+ * 2. define NEXT_FIT - using next-fit search
+ */
+#define NEXT_FIT
+
 /* private global variables */
 static char *heap_listp;
 static char *prev_hit;
@@ -40,7 +46,6 @@ static char *prev_hit;
 /* private functions */
 static void *extend_heap(size_t size);
 static void *find_fit(size_t asize);
-static void *next_fit(size_t asize);
 static void *coalesce(void *bp);
 static void place(void *bp, size_t asize);
 
@@ -94,7 +99,9 @@ int mm_init(void)
     PUTW(heap_listp + (WSIZE*3), PACK(0, 1));      /* epilogue header */
 
     heap_listp += (WSIZE*2);
+    #ifdef NEXT_FIT
     prev_hit = heap_listp;  /* init the next-fit pointer */
+    #endif
 
     /* extend the empty heap size by 4kB */
     if(extend_heap(2*DSIZE) == NULL)
@@ -146,7 +153,7 @@ void *mm_malloc(size_t size)
         asize = ALIGN(size + 2*WSIZE);
 
     /* search the free list for a fit */
-    if((bp = next_fit(asize)) != NULL) {
+    if((bp = find_fit(asize)) != NULL) {
         place(bp, asize);
         return (void *)bp;
     }
@@ -160,28 +167,13 @@ void *mm_malloc(size_t size)
 }
 
 /*
- * find_fit - simple first fit search.
+ * find_fit - first fit search / next fit search
  */
 static void *find_fit(size_t asize)
 {
     char *bp;
 
-    for(bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
-        if(!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
-            return (void *)bp;
-        }
-    }
-
-    return NULL;  /* no fit */
-}
-
-/*
- * find_fit - next fit search.
- */
-static void *next_fit(size_t asize)
-{
-    char *bp;
-
+    #ifdef NEXT_FIT
     /* start searching from the last position */
     for(bp = prev_hit; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
         if(!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
@@ -197,6 +189,13 @@ static void *next_fit(size_t asize)
             return (void *)bp;
         }
     }
+    #else
+    for(bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
+        if(!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
+            return (void *)bp;
+        }
+    }
+    #endif
 
     return NULL;  /* no fit */
 }
@@ -272,10 +271,12 @@ static void *coalesce(void *bp)
     PUTW(HDRP(bp), PACK(size, 0));
     PUTW(FTRP(bp), PACK(size, 0));
 
+    #ifdef NEXT_FIT
     /* prevent prev_hit points to the coalesced block */
     if((prev_hit < NEXT_BLKP(bp)) && (prev_hit > (char *)bp)) {
         prev_hit = bp;
     }
+    #endif
 
     return bp;
 }
