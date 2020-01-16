@@ -35,10 +35,12 @@ team_t team = {
 
 /* private global variables */
 static char *heap_listp;
+static char *prev_hit;
 
 /* private functions */
 static void *extend_heap(size_t size);
 static void *find_fit(size_t asize);
+static void *next_fit(size_t asize);
 static void *coalesce(void *bp);
 static void place(void *bp, size_t asize);
 
@@ -92,6 +94,7 @@ int mm_init(void)
     PUTW(heap_listp + (WSIZE*3), PACK(0, 1));      /* epilogue header */
 
     heap_listp += (WSIZE*2);
+    prev_hit = heap_listp;  /* init the next-fit pointer */
 
     /* extend the empty heap size by 4kB */
     if(extend_heap(2*DSIZE) == NULL)
@@ -143,7 +146,7 @@ void *mm_malloc(size_t size)
         asize = ALIGN(size + 2*WSIZE);
 
     /* search the free list for a fit */
-    if((bp = find_fit(asize)) != NULL) {
+    if((bp = next_fit(asize)) != NULL) {
         place(bp, asize);
         return (void *)bp;
     }
@@ -165,6 +168,32 @@ static void *find_fit(size_t asize)
 
     for(bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
         if(!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
+            return (void *)bp;
+        }
+    }
+
+    return NULL;  /* no fit */
+}
+
+/*
+ * find_fit - next fit search.
+ */
+static void *next_fit(size_t asize)
+{
+    char *bp;
+
+    /* start searching from the last position */
+    for(bp = prev_hit; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
+        if(!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
+            prev_hit = bp;  /* update the new next-fit position */
+            return (void *)bp;
+        }
+    }
+
+    /* if failed, start searching from the beginning */
+    for(bp = heap_listp; bp < prev_hit; bp = NEXT_BLKP(bp)) {
+        if(!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
+            prev_hit = bp;  /* update the new next-fit position */
             return (void *)bp;
         }
     }
@@ -242,6 +271,12 @@ static void *coalesce(void *bp)
 
     PUTW(HDRP(bp), PACK(size, 0));
     PUTW(FTRP(bp), PACK(size, 0));
+
+    /* prevent prev_hit points to the coalesced block */
+    if((prev_hit < NEXT_BLKP(bp)) && (prev_hit > (char *)bp)) {
+        prev_hit = bp;
+    }
+
     return bp;
 }
 
