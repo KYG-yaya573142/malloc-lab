@@ -41,7 +41,7 @@ team_t team = {
  * 2. define NEXT_FIT - using next-fit search
  */
 #define NO_NEXT_FIT
-#define DEBUG_SIMPLE_MODE
+#define NO_DEBUG_SIMPLE_MODE
 
 /* private global variables */
 static char *heap_listp;
@@ -255,7 +255,6 @@ static void place(void *bp, size_t asize)
     char *next_bp = GET_NEXT(bp);
     char *prev_bp = GET_PREV(bp);
 
-    #ifndef DEBUG_SIMPLE_MODE
     /* if the remainder of the free block > required min block size (4 words) */
     if((fsize - asize) >= (2*DSIZE)) {
         PUTW(HDRP(bp), PACK(asize, 1));  /* allocated block header */
@@ -281,19 +280,6 @@ static void place(void *bp, size_t asize)
         PUT_NEXT(GET_PREV(bp), next_bp);  /* update prev free block */
         PUT_PREV(GET_NEXT(bp), prev_bp);  /* update next free block */
     }
-    #else
-    /* use the whole free block without splitting */
-    PUTW(HDRP(bp), PACK(fsize, 1));  /* allocated block header */
-    PUTW(FTRP(bp), PACK(fsize, 1));  /* allocated block footer */
-    /* update the explicit free list (LIFO) */
-    if(next_bp == prev_bp) {  /* if there's only 1 free block left */
-    next_bp = NULL;
-    prev_bp = NULL;
-    }
-    PUT_NEXT(GET_PREV(bp), next_bp);  /* update prev free block */
-    PUT_PREV(GET_NEXT(bp), prev_bp);  /* update next free block */
-    #endif
-
 }
 
 /*
@@ -403,9 +389,6 @@ static void *coalesce(void *bp)
         prev_hit = bp;
     }
     #endif
-
-    /* insert the new block at the root of the list */
-
 
     return bp;
 }
