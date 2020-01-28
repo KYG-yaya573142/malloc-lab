@@ -142,6 +142,7 @@ static void *extend_heap(size_t size)
 void *mm_malloc(size_t size)
 {
     size_t asize;
+    size_t extendsize;
     char *bp;
 
     /* ignore spurious requests */
@@ -161,7 +162,8 @@ void *mm_malloc(size_t size)
     }
 
     /* no fit found, extend heap to place the block */
-    if((bp = extend_heap(asize)) == NULL)
+    extendsize = MAX(asize, CHUNKSIZE);
+    if((bp = extend_heap(extendsize)) == NULL)
         return NULL;
 
     place(bp, asize);
