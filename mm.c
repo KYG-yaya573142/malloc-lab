@@ -40,7 +40,7 @@ team_t team = {
  * 1. define nothing - using first-fit search
  * 2. define NEXT_FIT - using next-fit search
  */
-#define NO_NEXT_FIT
+#define NEXT_FITx
 #define NO_DEBUG_SIMPLE_MODE
 
 /* private global variables */
@@ -116,7 +116,7 @@ int mm_init(void)
     freelist_root = heap_listp + (WSIZE*1);        /* init the free list root ptr */
     heap_listp += (WSIZE*4);
     #ifdef NEXT_FIT
-    prev_hit = heap_listp;  /* init the next-fit pointer */
+    prev_hit = freelist_root;  /* init the next-fit pointer */
     #endif
 
     /* extend the empty heap size (bytes) */
@@ -215,17 +215,17 @@ static void *find_fit(size_t asize)
 
     #ifdef NEXT_FIT
     /* start searching from the last position */
-    for(bp = prev_hit; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
-        if(!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
-            prev_hit = bp;  /* update the new next-fit position */
+    for(bp = prev_hit; bp != freelist_root; bp = GET_NEXT(bp)) {
+        if(asize <= GET_SIZE(HDRP(bp))) {
+            prev_hit = GET_NEXT(bp);  /* update the new next-fit position */
             return (void *)bp;
         }
     }
 
     /* if failed, start searching from the beginning */
-    for(bp = heap_listp; bp < prev_hit; bp = NEXT_BLKP(bp)) {
-        if(!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
-            prev_hit = bp;  /* update the new next-fit position */
+    for(bp = GET_NEXT(freelist_root); bp != prev_hit; bp = GET_NEXT(bp)) {
+        if(asize <= GET_SIZE(HDRP(bp))) {
+            prev_hit = GET_NEXT(bp);  /* update the new next-fit position */
             return (void *)bp;
         }
     }
@@ -322,7 +322,14 @@ static void *coalesce(void *bp)
     size_t size = GET_SIZE(HDRP(bp));
     char *next_bp = GET_NEXT(freelist_root);
     char *prev_bp = NULL;
-    
+
+    #ifdef NEXT_FIT
+    /* prevent prev_hit points to the coalesced block */
+    while((prev_hit == PREV_BLKP(bp)) || (prev_hit == NEXT_BLKP(bp))) {
+        prev_hit = GET_NEXT(prev_hit);
+    }
+    #endif
+
     /* prev and next allocated */
     if(prev_alloc && next_alloc) {
         return bp;
@@ -382,13 +389,6 @@ static void *coalesce(void *bp)
         PUT_PREV(next_bp, bp);
         PUT_PREV(bp, freelist_root);
     }
-
-    #ifdef NEXT_FIT
-    /* prevent prev_hit points to the coalesced block */
-    if((prev_hit < NEXT_BLKP(bp)) && (prev_hit > (char *)bp)) {
-        prev_hit = bp;
-    }
-    #endif
 
     return bp;
 }
