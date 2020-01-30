@@ -179,6 +179,7 @@ void *mm_malloc(size_t size)
 
     /* search the free list for a fit */
     if((bp = find_fit(asize)) != NULL) {
+        detach(bp);
         place(bp, asize);
         return (void *)bp;
     }
@@ -188,6 +189,7 @@ void *mm_malloc(size_t size)
     if((bp = extend_heap(extendsize)) == NULL)
         return NULL;
 
+    detach(bp);
     place(bp, asize);
     return (void *)bp;
 }
@@ -244,7 +246,6 @@ static void place(void *bp, size_t asize)
 {   
     size_t fsize = GET_SIZE(HDRP(bp));  /* size of the choosed free block */
 
-    detach(bp);
     /* if the remainder of the free block > required min block size (4 words) */
     if((fsize - asize) >= (2*DSIZE)) {
         PUTW(HDRP(bp), PACK(asize, 1));  /* allocated block header */
@@ -295,6 +296,8 @@ static void *coalesce(void *bp)
 
     /* prev and next allocated */
     if(prev_alloc && next_alloc) {
+        PUTW(HDRP(bp), PACK(size, 0));
+        PUTW(FTRP(bp), PACK(size, 0));
         return bp;
     }
     /* prev allocated, next free */
@@ -332,12 +335,16 @@ static void *coalesce(void *bp)
 }
 
 /*
- * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
+ * mm_realloc - use previous and next block if it is free.
+ * First coalesce the prev and next block, then check the size of the new block
+ * if block size > size, use this block
+ * if block size < size, malloc a new block and re-insert the old block to free list
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    char *new_bp;
-    size_t old_size = GET_SIZE(HDRP(ptr)) - 2*WSIZE;  /* content size of the old block */
+    char *bp, *new_bp;
+    size_t old_size = GET_SIZE(HDRP(ptr));
+    size = ALIGN(size + 2*WSIZE);
 
     /* ignore spurious requests */
     if(ptr == NULL && size == 0) {
@@ -353,30 +360,21 @@ void *mm_realloc(void *ptr, size_t size)
         return NULL;
     }
 
-    if(size > old_size) {  /* allocate a larger space */
-        /* allocate the new block */
+    bp = coalesce(ptr);  /* coalesce prev and next free block if exist */
+
+    if(GET_SIZE(HDRP(bp)) >= size) {  /* use (prev + old + next) block */
+        if(bp != ptr) {  /* move the content if prev block is used */
+            memmove(bp, ptr, ((old_size > size)? (size - 2*WSIZE):(old_size - 2*WSIZE)));
+        }
+            place(bp, size);
+            return bp;
+    }
+    else { /* realloc a new block */
         if((new_bp = mm_malloc(size)) == NULL)
             return NULL;
-        memcpy(new_bp, ptr, old_size);
-        mm_free(ptr);  /* free the old block */
+        memmove(new_bp, ptr, (old_size - 2*WSIZE));
+        insert_root(bp);  /* re-insert the old block to the root of the free list */
         return (void *)new_bp;
-    }
-    else {  /**/
-        size = ALIGN(size + 2*WSIZE);
-        old_size += 2*WSIZE;
-        if((old_size - size) >= (2*DSIZE)) {
-            /* shrink the block to size */
-            PUTW(HDRP(ptr), PACK(size, 1));
-            PUTW(FTRP(ptr), PACK(size, 1));
-            /* free the remainder block */
-            PUTW(HDRP(NEXT_BLKP(ptr)), PACK((old_size - size), 0));
-            PUTW(FTRP(NEXT_BLKP(ptr)), PACK((old_size - size), 0));
-            insert_root(NEXT_BLKP(ptr));
-            return ptr;
-        }
-        else {
-            return ptr;
-        }
     }
 }
 
