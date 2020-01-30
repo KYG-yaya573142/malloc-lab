@@ -42,6 +42,7 @@ team_t team = {
  */
 #define NEXT_FITx
 #define NO_DEBUG_SIMPLE_MODE
+#define TEST_REALLOC
 
 /* private global variables */
 static char *heap_listp;
@@ -55,6 +56,8 @@ static void *extend_heap(size_t size);
 static void *find_fit(size_t asize);
 static void *coalesce(void *bp);
 static void place(void *bp, size_t asize);
+static void insert_root(void *bp);
+static void detach(void *bp);
 
 /* basic constants and macros */
 #define WSIZE 4             /* word size (bytes) */
@@ -107,8 +110,8 @@ int mm_init(void)
     if((heap_listp = mem_sbrk(6*WSIZE)) == (void *)-1)
         return -1;
     PUTW(heap_listp, 0);                           /* alignment padding */
-    PUTW(heap_listp + (WSIZE*1), 0);                        /* prev free block ptr */  /* <- freelist_root */
-    PUTW(heap_listp + (WSIZE*2), 0);                        /* next free block ptr */
+    PUTW(heap_listp + (WSIZE*1), 0);               /* prev free block ptr */  /* <- freelist_root */
+    PUTW(heap_listp + (WSIZE*2), 0);               /* next free block ptr */
     PUTW(heap_listp + (WSIZE*3), PACK(DSIZE, 1));  /* prologue header */
     PUTW(heap_listp + (WSIZE*4), PACK(DSIZE, 1));  /* prologue footer */      /* <- heap_listp */
     PUTW(heap_listp + (WSIZE*5), PACK(0, 1));      /* epilogue header */
@@ -134,7 +137,6 @@ int mm_init(void)
 static void *extend_heap(size_t size)
 {
     char *bp;
-    char *next_bp = GET_NEXT(freelist_root);
 
     /* allocate an even number of words to maintain allignment */
     size  =  ALIGN(size);
@@ -146,26 +148,13 @@ static void *extend_heap(size_t size)
     PUTW(FTRP(bp), PACK(size, 0));          /* free block footer */
     PUTW(HDRP(NEXT_BLKP(bp)), PACK(0, 1));  /* new epilogue header */
 
-    /* insert the new block at the root of the list */
-    if(next_bp == NULL) {  /* when initializing the first free block */
-        PUT_NEXT(freelist_root, bp);
-        PUT_PREV(freelist_root, bp);
-        PUT_NEXT(bp, freelist_root);
-        PUT_PREV(bp, freelist_root);
-    }
-    else {
-        PUT_NEXT(freelist_root, bp);
-        PUT_NEXT(bp, next_bp);
-        PUT_PREV(next_bp, bp);
-        PUT_PREV(bp, freelist_root);
-    }
-
     /* coalesce if the previous block was free */
-    #ifndef DEBUG_SIMPLE_MODE
-    return coalesce(bp);
-    #else
+    bp = coalesce(bp);
+
+    /* insert the new block at the root of the list */
+    insert_root(bp);
+
     return bp;
-    #endif
 }
 
 /* 
@@ -254,9 +243,8 @@ static void *find_fit(size_t asize)
 static void place(void *bp, size_t asize)
 {   
     size_t fsize = GET_SIZE(HDRP(bp));  /* size of the choosed free block */
-    char *next_bp = GET_NEXT(bp);
-    char *prev_bp = GET_PREV(bp);
 
+    detach(bp);
     /* if the remainder of the free block > required min block size (4 words) */
     if((fsize - asize) >= (2*DSIZE)) {
         PUTW(HDRP(bp), PACK(asize, 1));  /* allocated block header */
@@ -266,21 +254,11 @@ static void place(void *bp, size_t asize)
         PUTW(HDRP(bp), PACK(fsize, 0));  /* new free block header */
         PUTW(FTRP(bp), PACK(fsize, 0));  /* new free block footer */
         /* update the explicit free list (LIFO) */
-        PUT_NEXT(bp, next_bp);           /* link remainder to prev and next block */
-        PUT_PREV(bp, prev_bp);
-        PUT_NEXT(prev_bp, bp);           /* update prev free block */
-        PUT_PREV(next_bp, bp);           /* update next free block */
+        insert_root(bp);
     }
     else {  /* use the whole free block without splitting */
         PUTW(HDRP(bp), PACK(fsize, 1));  /* allocated block header */
         PUTW(FTRP(bp), PACK(fsize, 1));  /* allocated block footer */
-        /* update the explicit free list (LIFO) */
-        if(next_bp == prev_bp) {  /* if there's only 1 free block left */
-        next_bp = NULL;
-        prev_bp = NULL;
-        }
-        PUT_NEXT(GET_PREV(bp), next_bp);  /* update prev free block */
-        PUT_PREV(GET_NEXT(bp), prev_bp);  /* update next free block */
     }
 }
 
@@ -290,28 +268,13 @@ static void place(void *bp, size_t asize)
 void mm_free(void *bp)
 {
     size_t size = GET_SIZE(HDRP(bp));
-    char *next_bp = GET_NEXT(freelist_root);
 
     PUTW(HDRP(bp), PACK(size, 0));
     PUTW(FTRP(bp), PACK(size, 0));
 
+    bp = coalesce(bp);
     /* insert the free block at the root of the list */
-    if(next_bp == NULL) {
-        PUT_NEXT(freelist_root, bp);
-        PUT_PREV(freelist_root, bp);
-        PUT_NEXT(bp, freelist_root);
-        PUT_PREV(bp, freelist_root);
-    }
-    else {
-        PUT_NEXT(freelist_root, bp);
-        PUT_NEXT(bp, next_bp);
-        PUT_PREV(next_bp, bp);
-        PUT_PREV(bp, freelist_root);
-    }
-
-    #ifndef DEBUG_SIMPLE_MODE
-    coalesce(bp);
-    #endif
+    insert_root(bp);
 }
 
 /* 
@@ -322,8 +285,6 @@ static void *coalesce(void *bp)
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     size_t size = GET_SIZE(HDRP(bp));
-    char *next_bp = GET_NEXT(freelist_root);
-    char *prev_bp = NULL;
 
     #ifdef NEXT_FIT
     /* prevent prev_hit points to the coalesced block */
@@ -339,10 +300,7 @@ static void *coalesce(void *bp)
     /* prev allocated, next free */
     else if(prev_alloc && !next_alloc) {
         /* detach the next free block */
-        next_bp = GET_NEXT(NEXT_BLKP(bp));
-        prev_bp = GET_PREV(NEXT_BLKP(bp));
-        PUT_NEXT(prev_bp, next_bp);
-        PUT_PREV(next_bp, prev_bp);
+        detach(NEXT_BLKP(bp));
         /* coalesce the prev free block */
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         PUTW(HDRP(bp), PACK(size, 0));
@@ -351,45 +309,23 @@ static void *coalesce(void *bp)
     /* prev free, next allocated */
     else if(!prev_alloc && next_alloc) {
         /* detach the prev free block */
-        next_bp = GET_NEXT(PREV_BLKP(bp));
-        prev_bp = GET_PREV(PREV_BLKP(bp));
-        PUT_NEXT(prev_bp, next_bp);
-        PUT_PREV(next_bp, prev_bp);
+        detach(PREV_BLKP(bp));
         /* coalesce the next free block */
-        next_bp = GET_NEXT(bp);
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
         bp = PREV_BLKP(bp);
         PUTW(HDRP(bp), PACK(size, 0));
         PUTW(FTRP(bp), PACK(size, 0));
-        /* re-insert the new block at the root of the list */
-        PUT_NEXT(freelist_root, bp);
-        PUT_NEXT(bp, next_bp);
-        PUT_PREV(next_bp, bp);
-        PUT_PREV(bp, freelist_root);
     }
     /* prev and next free */
     else if(!prev_alloc && !next_alloc) {
-        /* detach the next free block */
-        next_bp = GET_NEXT(NEXT_BLKP(bp));
-        prev_bp = GET_PREV(NEXT_BLKP(bp));
-        PUT_NEXT(prev_bp, next_bp);
-        PUT_PREV(next_bp, prev_bp);
-        /* detach the prev free block */
-        next_bp = GET_NEXT(PREV_BLKP(bp));
-        prev_bp = GET_PREV(PREV_BLKP(bp));
-        PUT_NEXT(prev_bp, next_bp);
-        PUT_PREV(next_bp, prev_bp);
+        /* detach the prev and next free block */
+        detach(NEXT_BLKP(bp));
+        detach(PREV_BLKP(bp));
         /* coalesce the next and prev free blocks */
-        next_bp = GET_NEXT(bp);
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
         bp = PREV_BLKP(bp);
         PUTW(HDRP(bp), PACK(size, 0));
         PUTW(FTRP(bp), PACK(size, 0));
-        /* re-insert the new block at the root of the list */
-        PUT_NEXT(freelist_root, bp);
-        PUT_NEXT(bp, next_bp);
-        PUT_PREV(next_bp, bp);
-        PUT_PREV(bp, freelist_root);
     }
 
     return bp;
@@ -401,7 +337,7 @@ static void *coalesce(void *bp)
 void *mm_realloc(void *ptr, size_t size)
 {
     char *new_bp;
-    size_t old_size;
+    size_t old_size = GET_SIZE(HDRP(ptr)) - 2*WSIZE;  /* content size of the old block */
 
     /* ignore spurious requests */
     if(ptr == NULL && size == 0) {
@@ -417,22 +353,67 @@ void *mm_realloc(void *ptr, size_t size)
         return NULL;
     }
 
-    /* allocate the new block */
-    if((new_bp = mm_malloc(size)) == NULL)
-        return NULL;
-
-    old_size = GET_SIZE(HDRP(ptr)) - 2*WSIZE;  /* content size of the old block */
-
-    /* The contents of the new block are same as the old ptr block 
-       (up to the minimum of the old and new block sizes). */
-    if(old_size <= size) {
+    if(size > old_size) {  /* allocate a larger space */
+        /* allocate the new block */
+        if((new_bp = mm_malloc(size)) == NULL)
+            return NULL;
         memcpy(new_bp, ptr, old_size);
+        mm_free(ptr);  /* free the old block */
+        return (void *)new_bp;
     }
-    else {
-        memcpy(new_bp, ptr, size);
+    else {  /**/
+        size = ALIGN(size + 2*WSIZE);
+        old_size += 2*WSIZE;
+        if((old_size - size) >= (2*DSIZE)) {
+            /* shrink the block to size */
+            PUTW(HDRP(ptr), PACK(size, 1));
+            PUTW(FTRP(ptr), PACK(size, 1));
+            /* free the remainder block */
+            PUTW(HDRP(NEXT_BLKP(ptr)), PACK((old_size - size), 0));
+            PUTW(FTRP(NEXT_BLKP(ptr)), PACK((old_size - size), 0));
+            insert_root(NEXT_BLKP(ptr));
+            return ptr;
+        }
+        else {
+            return ptr;
+        }
     }
-    
-    mm_free(ptr);  /* free the old block */
-    return (void *)new_bp;
 }
 
+/* helper functions */
+/* insert bp to the root of exlicit free list */
+static void insert_root(void *bp)
+{
+    char *next_bp = GET_NEXT(freelist_root);
+
+    /* insert the free block at the root of the list */
+    if(next_bp == NULL) {
+        PUT_NEXT(freelist_root, bp);
+        PUT_PREV(freelist_root, bp);
+        PUT_NEXT(bp, freelist_root);
+        PUT_PREV(bp, freelist_root);
+    }
+    else {
+        PUT_NEXT(freelist_root, bp);
+        PUT_NEXT(bp, next_bp);
+        PUT_PREV(next_bp, bp);
+        PUT_PREV(bp, freelist_root);
+    }
+}
+
+/* detach bp from the explicit free list 
+ * Note: need to re-insert bp back to the list after manipulation finished.
+ */
+static void detach(void *bp)
+{
+    char *next_bp = GET_NEXT(bp);
+    char *prev_bp = GET_PREV(bp);
+
+    /* update the explicit free list (LIFO) */
+    if(next_bp == prev_bp) {  /* if there's only 1 free block left */
+    next_bp = NULL;
+    prev_bp = NULL;
+    }
+    PUT_NEXT(GET_PREV(bp), next_bp);  /* update prev free block */
+    PUT_PREV(GET_NEXT(bp), prev_bp);  /* update next free block */
+}
