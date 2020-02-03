@@ -51,6 +51,12 @@ static void *find_fit(size_t asize);
 static void *coalesce(void *bp);
 static void place(void *bp, size_t asize);
 
+/* heap checker */
+static void checkblock(void *bp);
+static void printblock(void *bp);
+void mm_checkheap(int verbose);
+void checkheap(int verbose);
+
 /* basic constants and macros */
 #define WSIZE 4             /* word size (bytes) */
 #define DSIZE 8             /* double word size (bytes) */
@@ -326,3 +332,66 @@ void *mm_realloc(void *ptr, size_t size)
     return (void *)new_bp;
 }
 
+/* check the consistency of heap */
+void checkheap(int verbose)
+{
+    char *bp = heap_listp;
+
+    /* chech prelogue block */
+    if((GET_SIZE(HDRP(heap_listp)) != DSIZE) || !GET_ALLOC(HDRP(heap_listp)))
+        printf("Bad prologue header\n");
+
+    if((GET_SIZE(FTRP(heap_listp)) != DSIZE) || !GET_ALLOC(FTRP(heap_listp)))
+        printf("Error: bad prologue footer\n");
+
+    /* check heap */
+    for(bp = heap_listp; GET_SIZE(HDRP(bp)); bp = NEXT_BLKP(bp)) {
+        if(verbose)
+            printblock(bp);
+        checkblock(bp);
+    }
+
+    /* check epilogue block */
+    if ((GET_SIZE(HDRP(bp)) != 0) || !(GET_ALLOC(HDRP(bp))))
+        printf("Error: bad epilogue header\n");
+
+    if(bp != (mem_heap_hi() + 1))
+        printf("Error: epilogue is not at the end of heap\n");
+}
+
+static void checkblock(void *bp)
+{
+    if((size_t)bp % 8) {
+        printf("Error: bp is not doubleword aligned\n");
+        printblock(bp);
+    }
+
+    if(GETW(HDRP(bp)) != GETW(FTRP(bp))) {
+        printf("Error: header does not match footer\n");
+        printblock(bp);
+    }
+}
+
+static void printblock(void *bp)
+{
+    size_t header_size = GET_SIZE(HDRP(bp));
+    size_t header_alloc = GET_ALLOC(HDRP(bp));
+    size_t footer_size = GET_SIZE(FTRP(bp));
+    size_t footer_alloc = GET_ALLOC(FTRP(bp));
+
+    if(header_size == 0) /* no need to print epilogue block */
+        return;
+
+    printf("%p: header: [%zu/%c] footer: [%zu/%c]\n", bp, 
+           header_size, (header_alloc ? 'a' : 'f'), 
+           footer_size, (footer_alloc ? 'a' : 'f')); 
+}
+
+/* 
+ * mm_checkheap - Check the heap for correctness
+ * This function is meant to be called through gdb
+ */
+void mm_checkheap(int verbose)  
+{ 
+    checkheap(verbose);
+}
