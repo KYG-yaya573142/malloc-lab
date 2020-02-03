@@ -52,10 +52,10 @@ static void *coalesce(void *bp);
 static void place(void *bp, size_t asize);
 
 /* heap checker */
+void mm_checkheap(int verbose);
+static void checkheap(int verbose);
 static void checkblock(void *bp);
 static void printblock(void *bp);
-void mm_checkheap(int verbose);
-void checkheap(int verbose);
 
 /* basic constants and macros */
 #define WSIZE 4             /* word size (bytes) */
@@ -119,29 +119,6 @@ int mm_init(void)
 }
 
 /* 
- * The extend_heap function is invoked in two different circumstances:
- * (1) when the heap is initialized
- * (2) when mm_malloc is unable to find a suitable fit.
- */
-static void *extend_heap(size_t size)
-{
-    char *bp;
-
-    /* allocate an even number of words to maintain allignment */
-    size  =  ALIGN(size);
-    if((bp = mem_sbrk(size)) == (void *)-1)
-        return NULL;
-
-    /* initialize free block header and footer and the epilogue header */
-    PUTW(HDRP(bp), PACK(size, 0));          /* free block header */
-    PUTW(FTRP(bp), PACK(size, 0));          /* free block footer */
-    PUTW(HDRP(NEXT_BLKP(bp)), PACK(0, 1));  /* new epilogue header */
-
-    /* coalesce if the previous block was free */
-    return coalesce(bp);
-}
-
-/* 
  * mm_malloc - 
  * Always allocate a block whose size is a multiple of the alignment.
  */
@@ -174,6 +151,96 @@ void *mm_malloc(size_t size)
 
     place(bp, asize);
     return (void *)bp;
+}
+
+/*
+ * mm_free - Freeing a block and coalesce prev/next free block if exist.
+ */
+void mm_free(void *bp)
+{
+    size_t size = GET_SIZE(HDRP(bp));
+
+    PUTW(HDRP(bp), PACK(size, 0));
+    PUTW(FTRP(bp), PACK(size, 0));
+
+    coalesce(bp);
+}
+
+/*
+ * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
+ */
+void *mm_realloc(void *ptr, size_t size)
+{
+    char *new_bp;
+    size_t old_size;
+
+    /* ignore spurious requests */
+    if(ptr == NULL && size == 0) {
+        return NULL;
+    }
+    /* if ptr is NULL, the call is equivalent to mm malloc(size) */
+    else if(ptr == NULL) {
+        return mm_malloc(size);
+    }
+    /* if size is equal to zero, the call is equivalent to mm free(ptr) */
+    else if(size == 0) {
+        mm_free(ptr);
+        return NULL;
+    }
+
+    /* allocate the new block */
+    if((new_bp = mm_malloc(size)) == NULL)
+        return NULL;
+
+    old_size = GET_SIZE(HDRP(ptr)) - 2*WSIZE;  /* content size of the old block */
+
+    /* The contents of the new block are same as the old ptr block 
+       (up to the minimum of the old and new block sizes). */
+    if(old_size <= size) {
+        memcpy(new_bp, ptr, old_size);
+    }
+    else {
+        memcpy(new_bp, ptr, size);
+    }
+    
+    mm_free(ptr);  /* free the old block */
+    return (void *)new_bp;
+}
+
+/* 
+ * mm_checkheap - Check the heap for correctness
+ * This function is meant to be called through gdb
+ */
+void mm_checkheap(int verbose)  
+{ 
+    checkheap(verbose);
+}
+
+/* 
+ * internal helper functions
+ */
+
+/* 
+ * The extend_heap function is invoked in two different circumstances:
+ * (1) when the heap is initialized
+ * (2) when mm_malloc is unable to find a suitable fit.
+ */
+static void *extend_heap(size_t size)
+{
+    char *bp;
+
+    /* allocate an even number of words to maintain allignment */
+    size  =  ALIGN(size);
+    if((bp = mem_sbrk(size)) == (void *)-1)
+        return NULL;
+
+    /* initialize free block header and footer and the epilogue header */
+    PUTW(HDRP(bp), PACK(size, 0));          /* free block header */
+    PUTW(FTRP(bp), PACK(size, 0));          /* free block footer */
+    PUTW(HDRP(NEXT_BLKP(bp)), PACK(0, 1));  /* new epilogue header */
+
+    /* coalesce if the previous block was free */
+    return coalesce(bp);
 }
 
 /*
@@ -237,19 +304,6 @@ static void place(void *bp, size_t asize)
     }
 }
 
-/*
- * mm_free - Freeing a block and coalesce prev/next free block if exist.
- */
-void mm_free(void *bp)
-{
-    size_t size = GET_SIZE(HDRP(bp));
-
-    PUTW(HDRP(bp), PACK(size, 0));
-    PUTW(FTRP(bp), PACK(size, 0));
-
-    coalesce(bp);
-}
-
 /* 
  * coalesce - merges adjacent free blocks using the boundary-tags coalescing technique
  */
@@ -291,49 +345,8 @@ static void *coalesce(void *bp)
     return bp;
 }
 
-/*
- * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
- */
-void *mm_realloc(void *ptr, size_t size)
-{
-    char *new_bp;
-    size_t old_size;
-
-    /* ignore spurious requests */
-    if(ptr == NULL && size == 0) {
-        return NULL;
-    }
-    /* if ptr is NULL, the call is equivalent to mm malloc(size) */
-    else if(ptr == NULL) {
-        return mm_malloc(size);
-    }
-    /* if size is equal to zero, the call is equivalent to mm free(ptr) */
-    else if(size == 0) {
-        mm_free(ptr);
-        return NULL;
-    }
-
-    /* allocate the new block */
-    if((new_bp = mm_malloc(size)) == NULL)
-        return NULL;
-
-    old_size = GET_SIZE(HDRP(ptr)) - 2*WSIZE;  /* content size of the old block */
-
-    /* The contents of the new block are same as the old ptr block 
-       (up to the minimum of the old and new block sizes). */
-    if(old_size <= size) {
-        memcpy(new_bp, ptr, old_size);
-    }
-    else {
-        memcpy(new_bp, ptr, size);
-    }
-    
-    mm_free(ptr);  /* free the old block */
-    return (void *)new_bp;
-}
-
 /* check the consistency of heap */
-void checkheap(int verbose)
+static void checkheap(int verbose)
 {
     char *bp = heap_listp;
 
@@ -345,7 +358,7 @@ void checkheap(int verbose)
         printf("Error: bad prologue footer\n");
 
     /* check heap */
-    for(bp = heap_listp; GET_SIZE(HDRP(bp)); bp = NEXT_BLKP(bp)) {
+    for(bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
         if(verbose)
             printblock(bp);
         checkblock(bp);
@@ -359,6 +372,7 @@ void checkheap(int verbose)
         printf("Error: epilogue is not at the end of heap\n");
 }
 
+/* check the heap content */
 static void checkblock(void *bp)
 {
     if((size_t)bp % 8) {
@@ -372,26 +386,15 @@ static void checkblock(void *bp)
     }
 }
 
+/* print the block header and footer */
 static void printblock(void *bp)
 {
     size_t header_size = GET_SIZE(HDRP(bp));
     size_t header_alloc = GET_ALLOC(HDRP(bp));
     size_t footer_size = GET_SIZE(FTRP(bp));
     size_t footer_alloc = GET_ALLOC(FTRP(bp));
-
-    if(header_size == 0) /* no need to print epilogue block */
-        return;
-
+        
     printf("%p: header: [%zu/%c] footer: [%zu/%c]\n", bp, 
            header_size, (header_alloc ? 'a' : 'f'), 
            footer_size, (footer_alloc ? 'a' : 'f')); 
-}
-
-/* 
- * mm_checkheap - Check the heap for correctness
- * This function is meant to be called through gdb
- */
-void mm_checkheap(int verbose)  
-{ 
-    checkheap(verbose);
 }
