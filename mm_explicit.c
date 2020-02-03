@@ -59,6 +59,15 @@ static void place(void *bp, size_t asize);
 static void insert_root(void *bp);
 static void detach(void *bp);
 
+/* heap checker */
+void mm_checkheap(int verbose);
+void mm_checklist(int verbose);
+static void checkheap(int verbose);
+static void checkblock(void *bp);
+static void printblock(void *bp);
+static void checklist(int verbose);
+static void printlist(void *bp);
+
 /* basic constants and macros */
 #define WSIZE 4             /* word size (bytes) */
 #define DSIZE 8             /* double word size (bytes) */
@@ -223,6 +232,24 @@ void *mm_realloc(void *ptr, size_t size)
         insert_root(bp);  /* re-insert the old block to the root of the free list */
         return (void *)new_bp;
     }
+}
+
+/* 
+ * mm_checkheap - Check the heap for correctness
+ * This function is meant to be called through gdb
+ */
+void mm_checkheap(int verbose)  
+{ 
+    checkheap(verbose);
+}
+
+/* 
+ * mm_checklist- Check the free list for correctness
+ * This function is meant to be called through gdb
+ */
+void mm_checklist(int verbose)  
+{ 
+    checklist(verbose);
 }
 
 /* 
@@ -417,4 +444,100 @@ static void detach(void *bp)
     }
     PUT_NEXT(GET_PREV(bp), next_bp);  /* update prev free block */
     PUT_PREV(GET_NEXT(bp), prev_bp);  /* update next free block */
+}
+
+/* check the consistency of heap */
+static void checkheap(int verbose)
+{
+    char *bp = heap_listp;
+
+    /* chech prelogue block */
+    if((GET_SIZE(HDRP(heap_listp)) != DSIZE) || !GET_ALLOC(HDRP(heap_listp)))
+        printf("Bad prologue header\n");
+
+    if((GET_SIZE(FTRP(heap_listp)) != DSIZE) || !GET_ALLOC(FTRP(heap_listp)))
+        printf("Error: bad prologue footer\n");
+
+    /* check heap */
+    for(bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
+        if(verbose)
+            printblock(bp);
+        checkblock(bp);
+    }
+
+    /* check epilogue block */
+    if ((GET_SIZE(HDRP(bp)) != 0) || !(GET_ALLOC(HDRP(bp))))
+        printf("Error: bad epilogue header\n");
+
+    if(bp != (mem_heap_hi() + 1))
+        printf("Error: epilogue is not at the end of heap\n");
+}
+
+/* check the heap content */
+static void checkblock(void *bp)
+{
+    if((size_t)bp % 8) {
+        printf("Error: bp is not doubleword aligned\n");
+        printblock(bp);
+    }
+
+    if(GETW(HDRP(bp)) != GETW(FTRP(bp))) {
+        printf("Error: header does not match footer\n");
+        printblock(bp);
+    }
+}
+
+/* print the block header and footer */
+static void printblock(void *bp)
+{
+    size_t header_size = GET_SIZE(HDRP(bp));
+    size_t header_alloc = GET_ALLOC(HDRP(bp));
+    size_t footer_size = GET_SIZE(FTRP(bp));
+    size_t footer_alloc = GET_ALLOC(FTRP(bp));
+        
+    printf("%p: header: [%zu/%c] footer: [%zu/%c]\n", bp, 
+           header_size, (header_alloc ? 'a' : 'f'), 
+           footer_size, (footer_alloc ? 'a' : 'f')); 
+}
+
+/* check the explicit free list */
+static void checklist(int verbose)
+{
+    char *bp = freelist_root;
+
+    if((GET_NEXT(bp) == NULL) && (GET_PREV(bp) == NULL))
+        printf("The free list is empty\n");
+
+    /* check the explicit free list */
+    for(bp = GET_NEXT(freelist_root); bp != freelist_root; bp = GET_NEXT(bp)) {
+        if(verbose)
+            printlist(bp);
+        /* mismatched prev and next block */
+        if(GET_PREV(GET_NEXT(bp)) != bp) 
+            printf("Error: the circular-linked list is broken");
+
+        if(GET_ALLOC(HDRP(bp)) || GET_ALLOC(FTRP(bp)))
+            printf("Error: allocated block exist in the free list");
+    }
+
+    /* check if detached free block exist */
+
+    /* check if any allocated block still in the free list */
+}
+
+/* print the explicit free list */
+static void printlist(void *bp)
+{
+    size_t header_size = GET_SIZE(HDRP(bp));
+    size_t header_alloc = GET_ALLOC(HDRP(bp));
+    size_t footer_size = GET_SIZE(FTRP(bp));
+    size_t footer_alloc = GET_ALLOC(FTRP(bp));
+    void *prev_bp = GET_PREV(bp);
+    void *next_bp = GET_NEXT(bp);
+
+    printf("%p: header: [%zu/%c] footer: [%zu/%c] prev_bp: [%p] next_bp: [%p]\n", bp, 
+           header_size, (header_alloc ? 'a' : 'f'), 
+           footer_size, (footer_alloc ? 'a' : 'f'),
+           prev_bp,
+           next_bp);
 }
