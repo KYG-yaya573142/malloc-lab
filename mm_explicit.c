@@ -130,34 +130,6 @@ int mm_init(void)
 }
 
 /* 
- * The extend_heap function is invoked in two different circumstances:
- * (1) when the heap is initialized
- * (2) when mm_malloc is unable to find a suitable fit.
- */
-static void *extend_heap(size_t size)
-{
-    char *bp;
-
-    /* allocate an even number of words to maintain allignment */
-    size  =  ALIGN(size);
-    if((bp = mem_sbrk(size)) == (void *)-1)
-        return NULL;
-
-    /* initialize free block header and footer and the epilogue header */
-    PUTW(HDRP(bp), PACK(size, 0));          /* free block header */
-    PUTW(FTRP(bp), PACK(size, 0));          /* free block footer */
-    PUTW(HDRP(NEXT_BLKP(bp)), PACK(0, 1));  /* new epilogue header */
-
-    /* coalesce if the previous block was free */
-    bp = coalesce(bp);
-
-    /* insert the new block at the root of the list */
-    insert_root(bp);
-
-    return bp;
-}
-
-/* 
  * mm_malloc - 
  * Always allocate a block whose size is a multiple of the alignment.
  */
@@ -192,6 +164,97 @@ void *mm_malloc(size_t size)
     detach(bp);
     place(bp, asize);
     return (void *)bp;
+}
+
+/*
+ * mm_free - Freeing a block and coalesce prev/next free block if exist.
+ */
+void mm_free(void *bp)
+{
+    size_t size = GET_SIZE(HDRP(bp));
+
+    PUTW(HDRP(bp), PACK(size, 0));
+    PUTW(FTRP(bp), PACK(size, 0));
+
+    bp = coalesce(bp);
+    /* insert the free block at the root of the list */
+    insert_root(bp);
+}
+
+/*
+ * mm_realloc - use previous and next block if it is free.
+ * First coalesce the prev and next block, then check the size of the new block
+ * if block size > size, use this block
+ * if block size < size, malloc a new block and re-insert the old block to free list
+ */
+void *mm_realloc(void *ptr, size_t size)
+{
+    char *bp, *new_bp;
+    size_t old_size = GET_SIZE(HDRP(ptr));
+    size = ALIGN(size + 2*WSIZE);
+
+    /* ignore spurious requests */
+    if(ptr == NULL && size == 0) {
+        return NULL;
+    }
+    /* if ptr is NULL, the call is equivalent to mm malloc(size) */
+    else if(ptr == NULL) {
+        return mm_malloc(size);
+    }
+    /* if size is equal to zero, the call is equivalent to mm free(ptr) */
+    else if(size == 0) {
+        mm_free(ptr);
+        return NULL;
+    }
+
+    bp = coalesce(ptr);  /* coalesce prev and next free block if exist */
+
+    if(GET_SIZE(HDRP(bp)) >= size) {  /* use (prev + old + next) block */
+        if(bp != ptr) {  /* move the content if prev block is used */
+            memmove(bp, ptr, ((old_size > size)? (size - 2*WSIZE):(old_size - 2*WSIZE)));
+        }
+            place(bp, size);
+            return bp;
+    }
+    else { /* realloc a new block */
+        if((new_bp = mm_malloc(size)) == NULL)
+            return NULL;
+        memmove(new_bp, ptr, (old_size - 2*WSIZE));
+        insert_root(bp);  /* re-insert the old block to the root of the free list */
+        return (void *)new_bp;
+    }
+}
+
+/* 
+ * internal helper functions
+ */
+
+/* 
+ * The extend_heap function is invoked in two different circumstances:
+ * (1) when the heap is initialized
+ * (2) when mm_malloc is unable to find a suitable fit.
+ */
+static void *extend_heap(size_t size)
+{
+    char *bp;
+
+    /* allocate an even number of words to maintain allignment */
+    size  =  ALIGN(size);
+    if((bp = mem_sbrk(size)) == (void *)-1)
+        return NULL;
+
+    /* initialize free block header and footer and the epilogue header */
+    PUTW(HDRP(bp), PACK(size, 0));          /* free block header */
+    PUTW(FTRP(bp), PACK(size, 0));          /* free block footer */
+    PUTW(HDRP(NEXT_BLKP(bp)), PACK(0, 1));  /* new epilogue header */
+
+    /* coalesce if the previous block was free */
+    bp = coalesce(bp);
+
+    /* insert the new block at the root of the list */
+    insert_root(bp);
+
+    return bp;
 }
 
 /*
@@ -263,21 +326,6 @@ static void place(void *bp, size_t asize)
     }
 }
 
-/*
- * mm_free - Freeing a block and coalesce prev/next free block if exist.
- */
-void mm_free(void *bp)
-{
-    size_t size = GET_SIZE(HDRP(bp));
-
-    PUTW(HDRP(bp), PACK(size, 0));
-    PUTW(FTRP(bp), PACK(size, 0));
-
-    bp = coalesce(bp);
-    /* insert the free block at the root of the list */
-    insert_root(bp);
-}
-
 /* 
  * coalesce - merges adjacent free blocks using the boundary-tags coalescing technique
  */
@@ -334,51 +382,6 @@ static void *coalesce(void *bp)
     return bp;
 }
 
-/*
- * mm_realloc - use previous and next block if it is free.
- * First coalesce the prev and next block, then check the size of the new block
- * if block size > size, use this block
- * if block size < size, malloc a new block and re-insert the old block to free list
- */
-void *mm_realloc(void *ptr, size_t size)
-{
-    char *bp, *new_bp;
-    size_t old_size = GET_SIZE(HDRP(ptr));
-    size = ALIGN(size + 2*WSIZE);
-
-    /* ignore spurious requests */
-    if(ptr == NULL && size == 0) {
-        return NULL;
-    }
-    /* if ptr is NULL, the call is equivalent to mm malloc(size) */
-    else if(ptr == NULL) {
-        return mm_malloc(size);
-    }
-    /* if size is equal to zero, the call is equivalent to mm free(ptr) */
-    else if(size == 0) {
-        mm_free(ptr);
-        return NULL;
-    }
-
-    bp = coalesce(ptr);  /* coalesce prev and next free block if exist */
-
-    if(GET_SIZE(HDRP(bp)) >= size) {  /* use (prev + old + next) block */
-        if(bp != ptr) {  /* move the content if prev block is used */
-            memmove(bp, ptr, ((old_size > size)? (size - 2*WSIZE):(old_size - 2*WSIZE)));
-        }
-            place(bp, size);
-            return bp;
-    }
-    else { /* realloc a new block */
-        if((new_bp = mm_malloc(size)) == NULL)
-            return NULL;
-        memmove(new_bp, ptr, (old_size - 2*WSIZE));
-        insert_root(bp);  /* re-insert the old block to the root of the free list */
-        return (void *)new_bp;
-    }
-}
-
-/* helper functions */
 /* insert bp to the root of exlicit free list */
 static void insert_root(void *bp)
 {
