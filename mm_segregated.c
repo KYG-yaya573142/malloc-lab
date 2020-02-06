@@ -214,22 +214,37 @@ void *mm_realloc(void *ptr, size_t size)
         return NULL;
     }
 
-    bp = coalesce(ptr);  /* coalesce prev and next free block if exist */
+    size_t prev_alloc = GET_ALLOC(HDRP(PREV_BLKP(ptr)));
+    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(ptr)));
+    size_t prev_size = prev_alloc? 0:GET_SIZE(HDRP(PREV_BLKP(ptr)));
+    size_t next_size = next_alloc? 0:GET_SIZE(HDRP(NEXT_BLKP(ptr)));
+    size_t fsize = old_size + prev_size + next_size;
 
-    if(GET_SIZE(HDRP(bp)) >= size) {  /* use (prev + old + next) block */
-        if(bp != ptr) {  /* move the content if prev block is used */
-            memmove(bp, ptr, ((old_size > size)? (size - 2*WSIZE):(old_size - 2*WSIZE)));
+    if(size > old_size) {  /* new block is bigger than ptr */
+        if(size > fsize) {  /* realloc a new block */
+            if((new_bp = mm_malloc(size)) == NULL)
+                return NULL;
+            memmove(new_bp, ptr, (old_size - 2*WSIZE));
+            mm_free(ptr);
+            return (void *)new_bp;
         }
+        else if(prev_alloc) {
+            ptr = coalesce(ptr);
+            realloc_place(ptr, size);
+            return ptr;
+        }
+        else {
+            bp = coalesce(ptr);
+            memmove(bp, ptr, ((old_size > size)? (size - 2*WSIZE):(old_size - 2*WSIZE)));
             realloc_place(bp, size);
             return bp;
+        }
     }
-    else { /* realloc a new block */
-        if((new_bp = mm_malloc(size)) == NULL)
-            return NULL;
-        memmove(new_bp, ptr, (old_size - 2*WSIZE));
-        insert_list(bp);  /* re-insert the old block to the free list */
-        return (void *)new_bp;
+    else {  /* new block is smaller than ptr */
+        realloc_place(ptr, size);  /* simply change the size of ptr */
+        return ptr;
     }
+    return ptr;
 }
 
 /* 
@@ -416,7 +431,7 @@ static void realloc_place(void *bp, size_t asize)
     size_t fsize = GET_SIZE(HDRP(bp));  /* size of the choosed free block */
 
     /* if the remainder of the free block > required min block size (4 words) */
-    if((fsize - asize) >= (2*DSIZE)) {
+    if(0) {
         PUTW(HDRP(bp), PACK(asize, 1));  /* allocated block header */
         PUTW(FTRP(bp), PACK(asize, 1));  /* allocated block footer */
         fsize -= asize;                  /* size of the remainder of the free block */
