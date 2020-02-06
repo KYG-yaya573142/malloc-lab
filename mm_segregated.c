@@ -1,10 +1,10 @@
-/* mm.c - a simple dynamic memory allocator based on an explicit
+/* mm.c - a simple dynamic memory allocator based on an segregated
  * free list with immediate boundary-tag coalescing.
  * 
  * Note: this allocator uses a model of the memory system
  * provided by the memlib.c package (max heap size: 20MB).
  * 
- * Allocator: explicit free list (LIFO).
+ * Allocator: segregated free list.
  * Note: This allocator is compiled with option -m32, which sets 
  * long and pointer types to 32 bits.
  * 
@@ -36,20 +36,9 @@ team_t team = {
     ""
 };
 
-/* switch between first-fit / next-fit search by using conditional compilation:
- * 1. define nothing - using first-fit search
- * 2. define NEXT_FIT - using next-fit search
- */
-#define NEXT_FITx
-#define NO_DEBUG_SIMPLE_MODE
-#define TEST_REALLOC
-
 /* private global variables */
 static char *heap_listp;
-static char *freelist_root;  /* start ptr for explixit free list */
-#ifdef NEXT_FIT
-static char *prev_hit;
-#endif
+static char *freelist_root;
 
 /* private functions */
 static void *extend_heap(size_t size);
@@ -57,7 +46,7 @@ static void *find_fit(size_t asize);
 static void *coalesce(void *bp);
 static void place(void *bp, size_t asize);
 static void insert_list(void *bp);
-static void detach(void *bp);
+static void detach_node(void *bp);
 
 /* heap checker */
 void mm_checkheap(int verbose);
@@ -137,11 +126,8 @@ int mm_init(void)
     PUTW(heap_listp + (WSIZE*14), PACK(DSIZE, 1));  /* prologue footer */  /* <- heap_listp */
     PUTW(heap_listp + (WSIZE*15), PACK(0, 1));      /* epilogue header */
 
-    freelist_root = heap_listp;         /* init the free list root ptr */
+    freelist_root = heap_listp;         /* init the freelist_root ptr */
     heap_listp += (WSIZE*14);
-    #ifdef NEXT_FIT
-    prev_hit = freelist_root;  /* init the next-fit pointer */
-    #endif
 
     /* extend the empty heap size (bytes) */
     if(extend_heap(2*DSIZE) == NULL)
@@ -172,7 +158,7 @@ void *mm_malloc(size_t size)
 
     /* search the free list for a fit */
     if((bp = find_fit(asize)) != NULL) {
-        detach(bp);
+        detach_node(bp);
         place(bp, asize);
         return (void *)bp;
     }
@@ -182,7 +168,7 @@ void *mm_malloc(size_t size)
     if((bp = extend_heap(extendsize)) == NULL)
         return NULL;
 
-    detach(bp);
+    detach_node(bp);
     place(bp, asize);
     return (void *)bp;
 }
@@ -198,7 +184,6 @@ void mm_free(void *bp)
     PUTW(FTRP(bp), PACK(size, 0));
 
     bp = coalesce(bp);
-    /* insert the free block at the root of the list */
     insert_list(bp);
 }
 
@@ -241,7 +226,7 @@ void *mm_realloc(void *ptr, size_t size)
         if((new_bp = mm_malloc(size)) == NULL)
             return NULL;
         memmove(new_bp, ptr, (old_size - 2*WSIZE));
-        insert_list(bp);  /* re-insert the old block to the root of the free list */
+        insert_list(bp);  /* re-insert the old block to the free list */
         return (void *)new_bp;
     }
 }
@@ -290,14 +275,14 @@ static void *extend_heap(size_t size)
     /* coalesce if the previous block was free */
     bp = coalesce(bp);
 
-    /* insert the new block at the root of the list */
+    /* insert the new block to the free list */
     insert_list(bp);
 
     return bp;
 }
 
 /*
- * find_fit - first fit search / next fit search
+ * find_fit - best-fit search
  */
 static void *find_fit(size_t asize)
 {
@@ -321,23 +306,6 @@ static void *find_fit(size_t asize)
             return NULL;
     }
 
-    #ifdef NEXT_FIT
-    /* start searching from the last position */
-    for(bp = prev_hit; bp != freelist_root; bp = GET_NEXT(bp)) {
-        if(asize <= GET_SIZE(HDRP(bp))) {
-            prev_hit = GET_NEXT(bp);  /* update the new next-fit position */
-            return (void *)bp;
-        }
-    }
-
-    /* if failed, start searching from the beginning */
-    for(bp = GET_NEXT(freelist_root); bp != prev_hit; bp = GET_NEXT(bp)) {
-        if(asize <= GET_SIZE(HDRP(bp))) {
-            prev_hit = GET_NEXT(bp);  /* update the new next-fit position */
-            return (void *)bp;
-        }
-    }
-    #else
     while(size_class <= (freelist_root + MAXN*WSIZE)) {
         for(bp = GET_NEXT(size_class); bp != NULL; bp = GET_NEXT(bp)) {
             if(asize <= GET_SIZE(HDRP(bp)))
@@ -345,7 +313,6 @@ static void *find_fit(size_t asize)
         }
         size_class += WSIZE;  /* jump to next size class */
     }
-    #endif
 
     return NULL;  /* no fit */
 }
@@ -371,7 +338,7 @@ static void place(void *bp, size_t asize)
         bp = NEXT_BLKP(bp);              /* point bp to the remainder */
         PUTW(HDRP(bp), PACK(fsize, 0));  /* new free block header */
         PUTW(FTRP(bp), PACK(fsize, 0));  /* new free block footer */
-        /* update the explicit free list (LIFO) */
+        /* update the segregated free list */
         insert_list(bp);
     }
     else {  /* use the whole free block without splitting */
@@ -389,13 +356,6 @@ static void *coalesce(void *bp)
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     size_t size = GET_SIZE(HDRP(bp));
 
-    #ifdef NEXT_FIT
-    /* prevent prev_hit points to the coalesced block */
-    while((prev_hit == PREV_BLKP(bp)) || (prev_hit == NEXT_BLKP(bp))) {
-        prev_hit = GET_NEXT(prev_hit);
-    }
-    #endif
-
     /* prev and next allocated */
     if(prev_alloc && next_alloc) {
         PUTW(HDRP(bp), PACK(size, 0));
@@ -405,7 +365,7 @@ static void *coalesce(void *bp)
     /* prev allocated, next free */
     else if(prev_alloc && !next_alloc) {
         /* detach the next free block */
-        detach(NEXT_BLKP(bp));
+        detach_node(NEXT_BLKP(bp));
         /* coalesce the prev free block */
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         PUTW(HDRP(bp), PACK(size, 0));
@@ -414,7 +374,7 @@ static void *coalesce(void *bp)
     /* prev free, next allocated */
     else if(!prev_alloc && next_alloc) {
         /* detach the prev free block */
-        detach(PREV_BLKP(bp));
+        detach_node(PREV_BLKP(bp));
         /* coalesce the next free block */
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
         bp = PREV_BLKP(bp);
@@ -424,8 +384,8 @@ static void *coalesce(void *bp)
     /* prev and next free */
     else if(!prev_alloc && !next_alloc) {
         /* detach the prev and next free block */
-        detach(NEXT_BLKP(bp));
-        detach(PREV_BLKP(bp));
+        detach_node(NEXT_BLKP(bp));
+        detach_node(PREV_BLKP(bp));
         /* coalesce the next and prev free blocks */
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
         bp = PREV_BLKP(bp);
@@ -436,7 +396,9 @@ static void *coalesce(void *bp)
     return bp;
 }
 
-/* insert bp to the segregated free list */
+/* 
+ * insert bp to the segregated free list
+ */
 static void insert_list(void *bp)
 {
     char *size_class = NULL;
@@ -482,10 +444,12 @@ static void insert_list(void *bp)
     }
 }
 
-/* detach bp from the segregated free list 
+/* 
+ * detach bp from the segregated free list 
+ * 
  * Note: need to re-insert bp back to the list after manipulation finished.
  */
-static void detach(void *bp)
+static void detach_node(void *bp)
 {
     char *next_bp = GET_NEXT(bp);
     char *prev_bp = GET_PREV(bp);
@@ -495,7 +459,9 @@ static void detach(void *bp)
         PUT_PREV(GET_NEXT(bp), prev_bp);  /* update next free block */
 }
 
-/* check the consistency of heap */
+/* 
+ * check the consistency of heap
+ */
 static void checkheap(int verbose)
 {
     char *bp = heap_listp;
@@ -522,7 +488,9 @@ static void checkheap(int verbose)
         printf("Error: epilogue is not at the end of heap\n");
 }
 
-/* check the heap content */
+/* 
+ * check the heap content
+ */
 static void checkblock(void *bp)
 {
     if((size_t)bp % 8) {
@@ -534,22 +502,15 @@ static void checkblock(void *bp)
         printf("Error: header does not match footer\n");
         printblock(bp);
     }
+    if(!GET_ALLOC(HDRP(bp))) {
+        if(!GET_ALLOC(HDRP(PREV_BLKP(bp))) || !GET_ALLOC(HDRP(NEXT_BLKP(bp))))
+            printf("Error: contiguous free block\n");
+    }
 }
 
-/* print the block header and footer */
-static void printblock(void *bp)
-{
-    size_t header_size = GET_SIZE(HDRP(bp));
-    size_t header_alloc = GET_ALLOC(HDRP(bp));
-    size_t footer_size = GET_SIZE(FTRP(bp));
-    size_t footer_alloc = GET_ALLOC(FTRP(bp));
-        
-    printf("%p: header: [%zu/%c] footer: [%zu/%c]\n", bp, 
-           header_size, (header_alloc ? 'a' : 'f'), 
-           footer_size, (footer_alloc ? 'a' : 'f')); 
-}
-
-/* check the explicit free list */
+/* 
+ * check the segregated free list
+ */
 static void checklist(int verbose)
 {
     char *bp;
@@ -568,6 +529,8 @@ static void checklist(int verbose)
             if((GET_PREV(bp) != NULL) && (GET_NEXT(bp) != NULL)) {
                 if(GET_PREV(GET_NEXT(bp)) != bp) 
                     printf("Error: the double-linked list is broken");
+                if(GET_SIZE(HDRP(bp)) > GET_SIZE(HDRP(GET_NEXT(bp))))
+                    printf("Error: wrong size order");
             }
             /* check if any allocated block still in the free list */
             if(GET_ALLOC(HDRP(bp)) || GET_ALLOC(FTRP(bp)))
@@ -576,7 +539,24 @@ static void checklist(int verbose)
     }
 }
 
-/* print the explicit free list */
+/* 
+ * print the block header and footer
+ */
+static void printblock(void *bp)
+{
+    size_t header_size = GET_SIZE(HDRP(bp));
+    size_t header_alloc = GET_ALLOC(HDRP(bp));
+    size_t footer_size = GET_SIZE(FTRP(bp));
+    size_t footer_alloc = GET_ALLOC(FTRP(bp));
+        
+    printf("%p: header: [%zu/%c] footer: [%zu/%c]\n", bp, 
+           header_size, (header_alloc ? 'a' : 'f'), 
+           footer_size, (footer_alloc ? 'a' : 'f')); 
+}
+
+/* 
+ * print the segregated free list
+ */
 static void printlist(void *bp)
 {
     size_t header_size = GET_SIZE(HDRP(bp));
