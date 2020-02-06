@@ -44,9 +44,10 @@ static char *freelist_root;
 static void *extend_heap(size_t size);
 static void *find_fit(size_t asize);
 static void *coalesce(void *bp);
-static void place(void *bp, size_t asize);
+static void *place(void *bp, size_t asize);
 static void insert_list(void *bp);
 static void detach_node(void *bp);
+static void realloc_place(void *bp, size_t asize);
 
 /* heap checker */
 void mm_checkheap(int verbose);
@@ -159,7 +160,7 @@ void *mm_malloc(size_t size)
     /* search the free list for a fit */
     if((bp = find_fit(asize)) != NULL) {
         detach_node(bp);
-        place(bp, asize);
+        bp = place(bp, asize);
         return (void *)bp;
     }
 
@@ -169,7 +170,7 @@ void *mm_malloc(size_t size)
         return NULL;
 
     detach_node(bp);
-    place(bp, asize);
+    bp = place(bp, asize);
     return (void *)bp;
 }
 
@@ -219,7 +220,7 @@ void *mm_realloc(void *ptr, size_t size)
         if(bp != ptr) {  /* move the content if prev block is used */
             memmove(bp, ptr, ((old_size > size)? (size - 2*WSIZE):(old_size - 2*WSIZE)));
         }
-            place(bp, size);
+            realloc_place(bp, size);
             return bp;
     }
     else { /* realloc a new block */
@@ -326,24 +327,35 @@ static void *find_fit(size_t asize)
  * 
  * Note: Internal fragmentation increases in the case (free size - asize) <= 2.
  */
-static void place(void *bp, size_t asize)
+static void *place(void *bp, size_t asize)
 {   
     size_t fsize = GET_SIZE(HDRP(bp));  /* size of the choosed free block */
 
     /* if the remainder of the free block > required min block size (4 words) */
     if((fsize - asize) >= (2*DSIZE)) {
-        PUTW(HDRP(bp), PACK(asize, 1));  /* allocated block header */
-        PUTW(FTRP(bp), PACK(asize, 1));  /* allocated block footer */
-        fsize -= asize;                  /* size of the remainder of the free block */
-        bp = NEXT_BLKP(bp);              /* point bp to the remainder */
-        PUTW(HDRP(bp), PACK(fsize, 0));  /* new free block header */
-        PUTW(FTRP(bp), PACK(fsize, 0));  /* new free block footer */
-        /* update the segregated free list */
-        insert_list(bp);
+        if(asize < 96) {  /* allocate small block on the left side */
+            PUTW(HDRP(bp), PACK(asize, 1));  /* allocated block header */
+            PUTW(FTRP(bp), PACK(asize, 1));  /* allocated block footer */
+            PUTW(HDRP(NEXT_BLKP(bp)), PACK((fsize - asize), 0));  /* new free block header */
+            PUTW(FTRP(NEXT_BLKP(bp)), PACK((fsize - asize), 0));  /* new free block footer */
+            /* update the segregated free list */
+            insert_list(NEXT_BLKP(bp));
+            return bp;
+        }
+        else {  /* allocate big block on the right */
+            PUTW(HDRP(bp), PACK((fsize - asize), 0));  /* new free block header */
+            PUTW(FTRP(bp), PACK((fsize - asize), 0));  /* new free block footer */
+            PUTW(HDRP(NEXT_BLKP(bp)), PACK(asize, 1));  /* allocated block header */
+            PUTW(FTRP(NEXT_BLKP(bp)), PACK(asize, 1));  /* allocated block footer */
+            bp = NEXT_BLKP(bp);
+            insert_list(PREV_BLKP(bp));
+            return bp;
+        }
     }
     else {  /* use the whole free block without splitting */
         PUTW(HDRP(bp), PACK(fsize, 1));  /* allocated block header */
         PUTW(FTRP(bp), PACK(fsize, 1));  /* allocated block footer */
+        return bp;
     }
 }
 
@@ -394,6 +406,30 @@ static void *coalesce(void *bp)
     }
 
     return bp;
+}
+
+/* 
+ * special place function for optimized mm_realloc
+ */
+static void realloc_place(void *bp, size_t asize)
+{   
+    size_t fsize = GET_SIZE(HDRP(bp));  /* size of the choosed free block */
+
+    /* if the remainder of the free block > required min block size (4 words) */
+    if((fsize - asize) >= (2*DSIZE)) {
+        PUTW(HDRP(bp), PACK(asize, 1));  /* allocated block header */
+        PUTW(FTRP(bp), PACK(asize, 1));  /* allocated block footer */
+        fsize -= asize;                  /* size of the remainder of the free block */
+        bp = NEXT_BLKP(bp);              /* point bp to the remainder */
+        PUTW(HDRP(bp), PACK(fsize, 0));  /* new free block header */
+        PUTW(FTRP(bp), PACK(fsize, 0));  /* new free block footer */
+        /* update the segregated free list */
+        insert_list(bp);
+    }
+    else {  /* use the whole free block without splitting */
+        PUTW(HDRP(bp), PACK(fsize, 1));  /* allocated block header */
+        PUTW(FTRP(bp), PACK(fsize, 1));  /* allocated block footer */
+    }
 }
 
 /* 
